@@ -1,20 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, getToken, setToken } from './api'
 import { filters, merged } from './data'
 
 const CATS = filters.slice(1)
 // field types: (none)=text, a=textarea, i=image upload, l=YouTube/Vimeo link, u=https link
 const SECTIONS = {
-  hero: [['name', 'Your name (logo)'], ['heroLine1', 'Headline, line 1'], ['heroLine2', 'Headline, line 2 (lime colour)'], ['heroText', 'Intro text', 'a'], ['availability', 'Availability badge'], ['ctaPrimary', 'Primary button text'], ['ctaSecondary', 'Secondary button text'], ['portrait', 'Portrait image (also used in About)', 'i'], ['heroVideo', 'Background video link (optional, direct .mp4 link)', 'u']],
+  hero: [['name', 'Your name (logo)'], ['heroLine1', 'Headline, line 1'], ['heroLine2', 'Headline, line 2 (lime colour)'], ['heroText', 'Intro text', 'a'], ['availability', 'Availability badge'], ['ctaPrimary', 'Primary button text'], ['ctaSecondary', 'Secondary button text'], ['portrait', 'Hero portrait image', 'i'], ['heroVideo', 'Background video link (optional, direct .mp4 link)', 'u']],
   reel: [['reelLabel', 'Showreel label'], ['reelTitle', 'Section title'], ['showreelEmbed', 'Showreel YouTube / Vimeo link', 'l'], ['showreelThumb', 'Showreel thumbnail image', 'i'], ['showreelDuration', 'Duration label']],
   works: [['worksTitle', 'Section title'], ['worksSub', 'Subtitle', 'a']],
-  about: [['aboutTitle', 'Headline'], ['aboutIntro', 'Introduction', 'a'], ['bio', 'Biography', 'a'], ['philosophy', 'Creative philosophy', 'a'], ['storytelling', 'Approach to storytelling', 'a']],
-  contact: [['contactTitle', 'Headline'], ['contactText', 'Supporting text', 'a'], ['email', 'Email address'], ['whatsapp', 'WhatsApp link (https://wa.me/8801XXXXXXXXX)', 'u'], ['instagram', 'Instagram link', 'u'], ['behance', 'Behance link', 'u'], ['linkedin', 'LinkedIn link', 'u'], ['formEndpoint', 'Contact form endpoint (Formspree link, optional)', 'u']],
+  about: [['aboutImage', 'About section image (separate from the hero)', 'i'], ['aboutTitle', 'Headline'], ['aboutIntro', 'Introduction', 'a'], ['bio', 'Biography', 'a'], ['philosophy', 'Creative philosophy', 'a'], ['storytelling', 'Approach to storytelling', 'a']],
+  contact: [['contactTitle', 'Headline'], ['contactText', 'Supporting text', 'a'], ['email', 'Email address'], ['whatsapp', 'WhatsApp number (with country code, e.g. +8801XXXXXXXXX)'], ['instagram', 'Instagram link', 'u'], ['behance', 'Behance link', 'u'], ['linkedin', 'LinkedIn link', 'u'], ['formEndpoint', 'Contact form endpoint (Formspree link, optional)', 'u']],
   footer: [['tagline', 'Footer tagline'], ['seoTitle', 'Browser tab title / Google title'], ['seoDescription', 'Google description', 'a']],
 }
 const TABS = [['projects', 'Projects'], ['hero', 'Hero'], ['reel', 'Showreel'], ['works', 'Works heading'], ['about', 'About'], ['services', 'Services'], ['process', 'Process'], ['software', 'Software'], ['contact', 'Contact & links'], ['footer', 'Footer & SEO']]
 
-const thumb = p => p.image ? <img src={p.image} alt="" /> : <div className="thumb">{p.embed ? 'VIDEO' : 'NO MEDIA'}</div>
+const thumb = p => p.image ? <img src={p.image} alt="" draggable={false} /> : <div className="thumb">{p.embed ? 'VIDEO' : 'NO MEDIA'}</div>
 
 function ImageField({ label, value, onChange }) {
   const [busy, setBusy] = useState(false)
@@ -120,6 +120,14 @@ export default function Admin() {
   const [saving, setSaving] = useState(false)
 
   const load = () => api('/projects').then(setList).catch(e => setErr(e.message))
+  const [dragId, setDragId] = useState(null)
+  const listRef = useRef([])
+  listRef.current = list
+  const moveItem = (a, id, to) => { const i = a.findIndex(p => p.id === id); if (i < 0 || to < 0 || to >= a.length) return a; const b = [...a]; const [it] = b.splice(i, 1); b.splice(to, 0, it); return b }
+  const saveOrder = async l => {
+    try { await api('/projects-order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: l.map(p => p.id) }) }); setMsg('Order saved. Your live site now shows this order.') } catch (x) { setMsg(x.message) }
+  }
+  const step = (id, dir) => { const i = list.findIndex(p => p.id === id); const l = moveItem(list, id, i + dir); setList(l); saveOrder(l) }
   useEffect(() => { api('/health').then(d => setMode(d.storage)).catch(() => {}) }, [])
   useEffect(() => {
     if (!authed) return
@@ -182,10 +190,14 @@ export default function Admin() {
                   {list.map(p => editing === p.id
                     ? <ProjectForm key={p.id} p={p} onAuthFail={out} onCancel={() => setEditing(null)} onDone={m => { setEditing(null); setMsg(m); load() }} />
                     : (
-                      <div className="arow" key={p.id}>
+                      <div className={`arow ${dragId === p.id ? 'drag' : ''}`} key={p.id} draggable
+                        onDragStart={e => { setDragId(p.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', p.id) }}
+                        onDragOver={e => { e.preventDefault(); if (dragId && dragId !== p.id) setList(moveItem(listRef.current, dragId, listRef.current.findIndex(x => x.id === p.id))) }}
+                        onDragEnd={() => { setDragId(null); saveOrder(listRef.current) }}>
+                        <span className="grip" title="Drag to reorder" aria-hidden="true">⠿</span>
                         {thumb(p)}
                         <div><strong>{p.title}</strong><div className="sub">{CATS.find(f => f.id === p.category)?.label} · {p.year}</div></div>
-                        <div className="acts"><button className="btn sm" onClick={() => { setEditing(p.id); setMsg('') }}>Edit</button><button className="btn sm" onClick={() => del(p.id)}>Delete</button></div>
+                        <div className="acts"><button className="btn sm" onClick={() => step(p.id, -1)} aria-label="Move up">↑</button><button className="btn sm" onClick={() => step(p.id, 1)} aria-label="Move down">↓</button><button className="btn sm" onClick={() => { setEditing(p.id); setMsg('') }}>Edit</button><button className="btn sm" onClick={() => del(p.id)}>Delete</button></div>
                       </div>
                     ))}
                 </div>

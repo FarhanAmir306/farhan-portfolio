@@ -9,11 +9,12 @@ export const site = {
   name: "YOUR NAME",
   tagline: "Stories told in light, motion and form.",
   email: "hello@example.com",
-  whatsapp: "https://wa.me/0000000000",
+  whatsapp: "+8801000000000",
   instagram: "https://instagram.com/",
   behance: "https://behance.net/",
   linkedin: "https://linkedin.com/",
   portrait: "", // e.g. "/images/portrait.jpg"
+  aboutImage: "", // image for the About section (separate from the hero portrait)
   heroVideo: "", // e.g. "/images/hero.mp4" (short, muted loop, under 5 MB)
   showreelThumb: "", // e.g. "/images/reel-thumb.jpg"
   showreelEmbed: "", // e.g. "https://www.youtube.com/embed/VIDEO_ID"

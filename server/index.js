@@ -88,9 +88,9 @@ function embedOf(u) {
 }
 
 // ---------- site content (everything editable from /admin) ----------
-const STR = ['name', 'tagline', 'email', 'whatsapp', 'instagram', 'behance', 'linkedin', 'portrait', 'heroVideo', 'showreelThumb', 'showreelEmbed', 'showreelDuration', 'formEndpoint', 'bio', 'philosophy', 'storytelling', 'heroLine1', 'heroLine2', 'heroText', 'availability', 'ctaPrimary', 'ctaSecondary', 'reelLabel', 'reelTitle', 'worksTitle', 'worksSub', 'aboutTitle', 'aboutIntro', 'servicesTitle', 'processTitle', 'contactTitle', 'contactText', 'seoTitle', 'seoDescription']
-const LINKS = ['whatsapp', 'instagram', 'behance', 'linkedin', 'formEndpoint']
-const MEDIA = ['portrait', 'showreelThumb', 'heroVideo']
+const STR = ['name', 'tagline', 'email', 'whatsapp', 'instagram', 'behance', 'linkedin', 'portrait', 'aboutImage', 'heroVideo', 'showreelThumb', 'showreelEmbed', 'showreelDuration', 'formEndpoint', 'bio', 'philosophy', 'storytelling', 'heroLine1', 'heroLine2', 'heroText', 'availability', 'ctaPrimary', 'ctaSecondary', 'reelLabel', 'reelTitle', 'worksTitle', 'worksSub', 'aboutTitle', 'aboutIntro', 'servicesTitle', 'processTitle', 'contactTitle', 'contactText', 'seoTitle', 'seoDescription']
+const LINKS = ['instagram', 'behance', 'linkedin', 'formEndpoint']
+const MEDIA = ['portrait', 'aboutImage', 'showreelThumb', 'heroVideo']
 const str = (v, n = 2000) => String(v ?? '').trim().slice(0, n)
 const arr = (v, n) => (Array.isArray(v) ? v.slice(0, n) : [])
 function cleanContent(b = {}) {
@@ -98,6 +98,7 @@ function cleanContent(b = {}) {
   for (const k of STR) if (k in b) o[k] = str(b[k])
   for (const k of LINKS) if (o[k] && !/^(https?:\/\/|mailto:|tel:)/i.test(o[k])) throw bad(`"${k}" must start with https://`)
   for (const k of MEDIA) if (o[k] && !/^(https:\/\/|\/)/.test(o[k])) throw bad(`"${k}" must be an https:// link or an uploaded image`)
+  if (o.whatsapp && !/^(\+?[\d\s\-()]{6,20}|https:\/\/wa\.me\/\d+.*)$/i.test(o.whatsapp)) throw bad('WhatsApp must be a phone number like +8801XXXXXXXXX')
   if (o.showreelEmbed) { const e = embedOf(o.showreelEmbed); if (!e) throw bad('Showreel link must be a YouTube or Vimeo link'); o.showreelEmbed = e.embed }
   if ('services' in b) o.services = arr(b.services, 12).map(s => ({ title: str(s?.title, 80), items: arr(s?.items, 20).map(x => str(x, 80)).filter(Boolean) })).filter(s => s.title)
   if ('steps' in b) o.steps = arr(b.steps, 8).map(s => ({ title: str(s?.title, 60), text: str(s?.text, 300) })).filter(s => s.title)
@@ -147,10 +148,26 @@ app.post('/api/login', (q, r) => {
 
 app.get('/api/health', (q, r) => r.json({ storage: store.mode }))
 app.get('/api/content', h(async (q, r) => r.json(await store.getContent())))
-app.put('/api/content', auth, h(async (q, r) => { const c = cleanContent(q.body); await store.setContent(c); r.json(c) }))
+app.put('/api/content', auth, h(async (q, r) => {
+  const old = await store.getContent()
+  const c = cleanContent(q.body)
+  if (old.projectOrder) c.projectOrder = old.projectOrder // keep the project order saved from the Projects tab
+  await store.setContent(c)
+  r.json(c)
+}))
+app.put('/api/projects-order', auth, h(async (q, r) => {
+  const ids = arr(q.body?.ids, 1000).map(x => str(x, 64))
+  await store.setContent({ ...(await store.getContent()), projectOrder: ids })
+  r.json({ ok: true })
+}))
 app.post('/api/upload', auth, upload, h(async (q, r) => { if (!q.file) throw bad('Choose an image first'); r.json({ url: (await store.putFile(q.file)).url }) }))
 
-app.get('/api/projects', h(async (q, r) => r.json((await store.list()).map(shape))))
+app.get('/api/projects', h(async (q, r) => {
+  const [rows, c] = await Promise.all([store.list(), store.getContent()])
+  const ord = c.projectOrder || []
+  // projects that are not in the saved order yet (newly added) come first, the rest follow your order
+  r.json(rows.map(shape).sort((a, b) => ord.indexOf(a.id) - ord.indexOf(b.id)))
+}))
 app.post('/api/projects', auth, upload, h(async (q, r) => {
   const { row } = await build(q, null)
   r.status(201).json(shape(await store.insert(row)))

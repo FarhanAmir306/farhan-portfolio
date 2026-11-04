@@ -1,0 +1,254 @@
+diff --git a/server/index.js b/server/index.js
+index 8f145b9..a0c819a 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -88,9 +88,9 @@ function embedOf(u) {
+ }
+ 
+ // ---------- site content (everything editable from /admin) ----------
+-const STR = ['name', 'tagline', 'email', 'whatsapp', 'instagram', 'behance', 'linkedin', 'portrait', 'heroVideo', 'showreelThumb', 'showreelEmbed', 'showreelDuration', 'formEndpoint', 'bio', 'philosophy', 'storytelling', 'heroLine1', 'heroLine2', 'heroText', 'availability', 'ctaPrimary', 'ctaSecondary', 'reelLabel', 'reelTitle', 'worksTitle', 'worksSub', 'aboutTitle', 'aboutIntro', 'servicesTitle', 'processTitle', 'contactTitle', 'contactText', 'seoTitle', 'seoDescription']
+-const LINKS = ['whatsapp', 'instagram', 'behance', 'linkedin', 'formEndpoint']
+-const MEDIA = ['portrait', 'showreelThumb', 'heroVideo']
++const STR = ['name', 'tagline', 'email', 'whatsapp', 'instagram', 'behance', 'linkedin', 'portrait', 'aboutImage', 'heroVideo', 'showreelThumb', 'showreelEmbed', 'showreelDuration', 'formEndpoint', 'bio', 'philosophy', 'storytelling', 'heroLine1', 'heroLine2', 'heroText', 'availability', 'ctaPrimary', 'ctaSecondary', 'reelLabel', 'reelTitle', 'worksTitle', 'worksSub', 'aboutTitle', 'aboutIntro', 'servicesTitle', 'processTitle', 'contactTitle', 'contactText', 'seoTitle', 'seoDescription']
++const LINKS = ['instagram', 'behance', 'linkedin', 'formEndpoint']
++const MEDIA = ['portrait', 'aboutImage', 'showreelThumb', 'heroVideo']
+ const str = (v, n = 2000) => String(v ?? '').trim().slice(0, n)
+ const arr = (v, n) => (Array.isArray(v) ? v.slice(0, n) : [])
+ function cleanContent(b = {}) {
+@@ -98,6 +98,7 @@ function cleanContent(b = {}) {
+   for (const k of STR) if (k in b) o[k] = str(b[k])
+   for (const k of LINKS) if (o[k] && !/^(https?:\/\/|mailto:|tel:)/i.test(o[k])) throw bad(`"${k}" must start with https://`)
+   for (const k of MEDIA) if (o[k] && !/^(https:\/\/|\/)/.test(o[k])) throw bad(`"${k}" must be an https:// link or an uploaded image`)
++  if (o.whatsapp && !/^(\+?[\d\s\-()]{6,20}|https:\/\/wa\.me\/\d+.*)$/i.test(o.whatsapp)) throw bad('WhatsApp must be a phone number like +8801XXXXXXXXX')
+   if (o.showreelEmbed) { const e = embedOf(o.showreelEmbed); if (!e) throw bad('Showreel link must be a YouTube or Vimeo link'); o.showreelEmbed = e.embed }
+   if ('services' in b) o.services = arr(b.services, 12).map(s => ({ title: str(s?.title, 80), items: arr(s?.items, 20).map(x => str(x, 80)).filter(Boolean) })).filter(s => s.title)
+   if ('steps' in b) o.steps = arr(b.steps, 8).map(s => ({ title: str(s?.title, 60), text: str(s?.text, 300) })).filter(s => s.title)
+@@ -147,10 +148,26 @@ app.post('/api/login', (q, r) => {
+ 
+ app.get('/api/health', (q, r) => r.json({ storage: store.mode }))
+ app.get('/api/content', h(async (q, r) => r.json(await store.getContent())))
+-app.put('/api/content', auth, h(async (q, r) => { const c = cleanContent(q.body); await store.setContent(c); r.json(c) }))
++app.put('/api/content', auth, h(async (q, r) => {
++  const old = await store.getContent()
++  const c = cleanContent(q.body)
++  if (old.projectOrder) c.projectOrder = old.projectOrder // keep the project order saved from the Projects tab
++  await store.setContent(c)
++  r.json(c)
++}))
++app.put('/api/projects-order', auth, h(async (q, r) => {
++  const ids = arr(q.body?.ids, 1000).map(x => str(x, 64))
++  await store.setContent({ ...(await store.getContent()), projectOrder: ids })
++  r.json({ ok: true })
++}))
+ app.post('/api/upload', auth, upload, h(async (q, r) => { if (!q.file) throw bad('Choose an image first'); r.json({ url: (await store.putFile(q.file)).url }) }))
+ 
+-app.get('/api/projects', h(async (q, r) => r.json((await store.list()).map(shape))))
++app.get('/api/projects', h(async (q, r) => {
++  const [rows, c] = await Promise.all([store.list(), store.getContent()])
++  const ord = c.projectOrder || []
++  // projects that are not in the saved order yet (newly added) come first, the rest follow your order
++  r.json(rows.map(shape).sort((a, b) => ord.indexOf(a.id) - ord.indexOf(b.id)))
++}))
+ app.post('/api/projects', auth, upload, h(async (q, r) => {
+   const { row } = await build(q, null)
+   r.status(201).json(shape(await store.insert(row)))
+diff --git a/src/Admin.jsx b/src/Admin.jsx
+index 05f6297..8eea1ba 100644
+--- a/src/Admin.jsx
++++ b/src/Admin.jsx
+@@ -1,20 +1,20 @@
+-import { useEffect, useState } from 'react'
++import { useEffect, useRef, useState } from 'react'
+ import { api, getToken, setToken } from './api'
+ import { filters, merged } from './data'
+ 
+ const CATS = filters.slice(1)
+ // field types: (none)=text, a=textarea, i=image upload, l=YouTube/Vimeo link, u=https link
+ const SECTIONS = {
+-  hero: [['name', 'Your name (logo)'], ['heroLine1', 'Headline, line 1'], ['heroLine2', 'Headline, line 2 (lime colour)'], ['heroText', 'Intro text', 'a'], ['availability', 'Availability badge'], ['ctaPrimary', 'Primary button text'], ['ctaSecondary', 'Secondary button text'], ['portrait', 'Portrait image (also used in About)', 'i'], ['heroVideo', 'Background video link (optional, direct .mp4 link)', 'u']],
++  hero: [['name', 'Your name (logo)'], ['heroLine1', 'Headline, line 1'], ['heroLine2', 'Headline, line 2 (lime colour)'], ['heroText', 'Intro text', 'a'], ['availability', 'Availability badge'], ['ctaPrimary', 'Primary button text'], ['ctaSecondary', 'Secondary button text'], ['portrait', 'Hero portrait image', 'i'], ['heroVideo', 'Background video link (optional, direct .mp4 link)', 'u']],
+   reel: [['reelLabel', 'Showreel label'], ['reelTitle', 'Section title'], ['showreelEmbed', 'Showreel YouTube / Vimeo link', 'l'], ['showreelThumb', 'Showreel thumbnail image', 'i'], ['showreelDuration', 'Duration label']],
+   works: [['worksTitle', 'Section title'], ['worksSub', 'Subtitle', 'a']],
+-  about: [['aboutTitle', 'Headline'], ['aboutIntro', 'Introduction', 'a'], ['bio', 'Biography', 'a'], ['philosophy', 'Creative philosophy', 'a'], ['storytelling', 'Approach to storytelling', 'a']],
+-  contact: [['contactTitle', 'Headline'], ['contactText', 'Supporting text', 'a'], ['email', 'Email address'], ['whatsapp', 'WhatsApp link (https://wa.me/8801XXXXXXXXX)', 'u'], ['instagram', 'Instagram link', 'u'], ['behance', 'Behance link', 'u'], ['linkedin', 'LinkedIn link', 'u'], ['formEndpoint', 'Contact form endpoint (Formspree link, optional)', 'u']],
++  about: [['aboutImage', 'About section image (separate from the hero)', 'i'], ['aboutTitle', 'Headline'], ['aboutIntro', 'Introduction', 'a'], ['bio', 'Biography', 'a'], ['philosophy', 'Creative philosophy', 'a'], ['storytelling', 'Approach to storytelling', 'a']],
++  contact: [['contactTitle', 'Headline'], ['contactText', 'Supporting text', 'a'], ['email', 'Email address'], ['whatsapp', 'WhatsApp number (with country code, e.g. +8801XXXXXXXXX)'], ['instagram', 'Instagram link', 'u'], ['behance', 'Behance link', 'u'], ['linkedin', 'LinkedIn link', 'u'], ['formEndpoint', 'Contact form endpoint (Formspree link, optional)', 'u']],
+   footer: [['tagline', 'Footer tagline'], ['seoTitle', 'Browser tab title / Google title'], ['seoDescription', 'Google description', 'a']],
+ }
+ const TABS = [['projects', 'Projects'], ['hero', 'Hero'], ['reel', 'Showreel'], ['works', 'Works heading'], ['about', 'About'], ['services', 'Services'], ['process', 'Process'], ['software', 'Software'], ['contact', 'Contact & links'], ['footer', 'Footer & SEO']]
+ 
+-const thumb = p => p.image ? <img src={p.image} alt="" /> : <div className="thumb">{p.embed ? 'VIDEO' : 'NO MEDIA'}</div>
++const thumb = p => p.image ? <img src={p.image} alt="" draggable={false} /> : <div className="thumb">{p.embed ? 'VIDEO' : 'NO MEDIA'}</div>
+ 
+ function ImageField({ label, value, onChange }) {
+   const [busy, setBusy] = useState(false)
+@@ -120,6 +120,14 @@ export default function Admin() {
+   const [saving, setSaving] = useState(false)
+ 
+   const load = () => api('/projects').then(setList).catch(e => setErr(e.message))
++  const [dragId, setDragId] = useState(null)
++  const listRef = useRef([])
++  listRef.current = list
++  const moveItem = (a, id, to) => { const i = a.findIndex(p => p.id === id); if (i < 0 || to < 0 || to >= a.length) return a; const b = [...a]; const [it] = b.splice(i, 1); b.splice(to, 0, it); return b }
++  const saveOrder = async l => {
++    try { await api('/projects-order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: l.map(p => p.id) }) }); setMsg('Order saved. Your live site now shows this order.') } catch (x) { setMsg(x.message) }
++  }
++  const step = (id, dir) => { const i = list.findIndex(p => p.id === id); const l = moveItem(list, id, i + dir); setList(l); saveOrder(l) }
+   useEffect(() => { api('/health').then(d => setMode(d.storage)).catch(() => {}) }, [])
+   useEffect(() => {
+     if (!authed) return
+@@ -182,10 +190,14 @@ export default function Admin() {
+                   {list.map(p => editing === p.id
+                     ? <ProjectForm key={p.id} p={p} onAuthFail={out} onCancel={() => setEditing(null)} onDone={m => { setEditing(null); setMsg(m); load() }} />
+                     : (
+-                      <div className="arow" key={p.id}>
++                      <div className={`arow ${dragId === p.id ? 'drag' : ''}`} key={p.id} draggable
++                        onDragStart={e => { setDragId(p.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', p.id) }}
++                        onDragOver={e => { e.preventDefault(); if (dragId && dragId !== p.id) setList(moveItem(listRef.current, dragId, listRef.current.findIndex(x => x.id === p.id))) }}
++                        onDragEnd={() => { setDragId(null); saveOrder(listRef.current) }}>
++                        <span className="grip" title="Drag to reorder" aria-hidden="true">⠿</span>
+                         {thumb(p)}
+                         <div><strong>{p.title}</strong><div className="sub">{CATS.find(f => f.id === p.category)?.label} · {p.year}</div></div>
+-                        <div className="acts"><button className="btn sm" onClick={() => { setEditing(p.id); setMsg('') }}>Edit</button><button className="btn sm" onClick={() => del(p.id)}>Delete</button></div>
++                        <div className="acts"><button className="btn sm" onClick={() => step(p.id, -1)} aria-label="Move up">↑</button><button className="btn sm" onClick={() => step(p.id, 1)} aria-label="Move down">↓</button><button className="btn sm" onClick={() => { setEditing(p.id); setMsg('') }}>Edit</button><button className="btn sm" onClick={() => del(p.id)}>Delete</button></div>
+                       </div>
+                     ))}
+                 </div>
+diff --git a/src/App.jsx b/src/App.jsx
+index c089700..fb8f4d4 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -421,10 +421,12 @@ function Work({ open }) {
+ function About() {
+   return (
+     <section id="about" className="alt">
+-      <div className="wrap about">
+-        <Rv>
+-          <Media src={site.portrait} label="Portrait" className="portrait" />
+-        </Rv>
++      <div className={`wrap about ${site.aboutImage ? "" : "solo"}`}>
++        {site.aboutImage && (
++          <Rv>
++            <Media src={site.aboutImage} label="About" className="portrait" />
++          </Rv>
++        )}
+         <Rv>
+           <h2>{site.aboutTitle}</h2>
+           <p>{site.aboutIntro}</p>
+@@ -516,6 +518,31 @@ const Marquee = () => {
+ 
+ function Contact() {
+   const [msg, setMsg] = useState("");
++  const [wa, setWa] = useState(false);
++  const [copied, setCopied] = useState(false);
++  const waShow = /^https?:/i.test(site.whatsapp)
++    ? "+" + ((site.whatsapp.match(/wa\.me\/(\d+)/) || [])[1] || "")
++    : site.whatsapp;
++  const waDigits = waShow.replace(/\D/g, "");
++  useEffect(() => {
++    if (!wa) return;
++    const t = setTimeout(() => setWa(false), 12000);
++    return () => clearTimeout(t);
++  }, [wa]);
++  const copyWa = async () => {
++    try {
++      await navigator.clipboard.writeText(waShow);
++    } catch {
++      const t = document.createElement("textarea");
++      t.value = waShow;
++      document.body.appendChild(t);
++      t.select();
++      document.execCommand("copy");
++      t.remove();
++    }
++    setCopied(true);
++    setTimeout(() => setCopied(false), 2000);
++  };
+   const submit = async (e) => {
+     e.preventDefault();
+     const d = Object.fromEntries(new FormData(e.target));
+@@ -541,15 +568,43 @@ function Contact() {
+   };
+   return (
+     <section id="contact">
++      <AnimatePresence>
++        {wa && (
++          <motion.div
++            className="watoast"
++            role="status"
++            initial={{ y: -80, opacity: 0 }}
++            animate={{ y: 0, opacity: 1 }}
++            exit={{ y: -80, opacity: 0 }}
++            transition={{ duration: 0.4, ease }}
++          >
++            <span className="walbl">WhatsApp</span>
++            <strong>{waShow}</strong>
++            <button onClick={copyWa}>{copied ? "Copied ✓" : "Copy"}</button>
++            <a
++              href={`https://wa.me/${waDigits}`}
++              target="_blank"
++              rel="noopener noreferrer"
++            >
++              Open chat ↗
++            </a>
++            <button aria-label="Close" onClick={() => setWa(false)}>
++              ✕
++            </button>
++          </motion.div>
++        )}
++      </AnimatePresence>
+       <div className="wrap ct">
+         <Rv>
+           <h2>{site.contactTitle}</h2>
+           <p className="sub">{site.contactText}</p>
+           <div className="soc">
+             <a href={`mailto:${site.email}`}>{site.email}</a>
+-            <a href={site.whatsapp} target="_blank" rel="noopener noreferrer">
+-              WhatsApp
+-            </a>
++            {waDigits && (
++              <button type="button" onClick={() => setWa(true)}>
++                WhatsApp
++              </button>
++            )}
+             <a href={site.instagram} target="_blank" rel="noopener noreferrer">
+               Instagram
+             </a>
+diff --git a/src/data.js b/src/data.js
+index 2bd21a4..d63eff4 100644
+--- a/src/data.js
++++ b/src/data.js
+@@ -9,11 +9,12 @@ export const site = {
+   name: "YOUR NAME",
+   tagline: "Stories told in light, motion and form.",
+   email: "hello@example.com",
+-  whatsapp: "https://wa.me/0000000000",
++  whatsapp: "+8801000000000",
+   instagram: "https://instagram.com/",
+   behance: "https://behance.net/",
+   linkedin: "https://linkedin.com/",
+   portrait: "", // e.g. "/images/portrait.jpg"
++  aboutImage: "", // image for the About section (separate from the hero portrait)
+   heroVideo: "", // e.g. "/images/hero.mp4" (short, muted loop, under 5 MB)
+   showreelThumb: "", // e.g. "/images/reel-thumb.jpg"
+   showreelEmbed: "", // e.g. "https://www.youtube.com/embed/VIDEO_ID"
+diff --git a/src/styles.css b/src/styles.css
+index 90690a7..c1a7c2b 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -200,3 +200,15 @@ input[type=file]{padding:10px;font-size:13px}
+ .chk input{width:auto}
+ .savebar{position:sticky;bottom:0;z-index:5;background:var(--bg);border-top:1px solid var(--ln);padding:16px 0;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+ @media(max-width:900px){.arow{flex-wrap:wrap}.arow .acts{margin-left:0}}
++
++/* v5: project order, whatsapp toast, about without image */
++.grip{cursor:grab;color:var(--mu);font-size:22px;padding:0 4px;user-select:none;flex:none}
++.arow.drag{opacity:.4;border-color:var(--ac)}
++.about.solo{grid-template-columns:1fr;max-width:820px}
++.soc button{background:none;border:0;border-bottom:1px solid var(--ln);padding:0 0 2px;color:inherit;font:inherit;cursor:pointer;transition:.3s}
++.soc button:hover{color:var(--ac);border-color:var(--ac)}
++.watoast{position:fixed;top:calc(78px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:140;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:center;background:var(--bg2);border:1px solid var(--ac);padding:12px 18px;box-shadow:0 12px 40px rgba(0,0,0,.6);max-width:calc(100vw - 24px)}
++.watoast .walbl{color:var(--mu);font-size:12px;letter-spacing:.12em;text-transform:uppercase}
++.watoast strong{font-size:18px;letter-spacing:.02em}
++.watoast button,.watoast a{background:none;border:1px solid var(--tx);color:var(--tx);padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
++.watoast button:hover,.watoast a:hover{background:var(--tx);color:var(--bg)}

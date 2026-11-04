@@ -421,10 +421,12 @@ function Work({ open }) {
 function About() {
   return (
     <section id="about" className="alt">
-      <div className="wrap about">
-        <Rv>
-          <Media src={site.portrait} label="Portrait" className="portrait" />
-        </Rv>
+      <div className={`wrap about ${site.aboutImage ? "" : "solo"}`}>
+        {site.aboutImage && (
+          <Rv>
+            <Media src={site.aboutImage} label="About" className="portrait" />
+          </Rv>
+        )}
         <Rv>
           <h2>{site.aboutTitle}</h2>
           <p>{site.aboutIntro}</p>
@@ -516,6 +518,31 @@ const Marquee = () => {
 
 function Contact() {
   const [msg, setMsg] = useState("");
+  const [wa, setWa] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const waShow = /^https?:/i.test(site.whatsapp)
+    ? "+" + ((site.whatsapp.match(/wa\.me\/(\d+)/) || [])[1] || "")
+    : site.whatsapp;
+  const waDigits = waShow.replace(/\D/g, "");
+  useEffect(() => {
+    if (!wa) return;
+    const t = setTimeout(() => setWa(false), 12000);
+    return () => clearTimeout(t);
+  }, [wa]);
+  const copyWa = async () => {
+    try {
+      await navigator.clipboard.writeText(waShow);
+    } catch {
+      const t = document.createElement("textarea");
+      t.value = waShow;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand("copy");
+      t.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
   const submit = async (e) => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
@@ -541,15 +568,43 @@ function Contact() {
   };
   return (
     <section id="contact">
+      <AnimatePresence>
+        {wa && (
+          <motion.div
+            className="watoast"
+            role="status"
+            initial={{ y: -80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -80, opacity: 0 }}
+            transition={{ duration: 0.4, ease }}
+          >
+            <span className="walbl">WhatsApp</span>
+            <strong>{waShow}</strong>
+            <button onClick={copyWa}>{copied ? "Copied ✓" : "Copy"}</button>
+            <a
+              href={`https://wa.me/${waDigits}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open chat ↗
+            </a>
+            <button aria-label="Close" onClick={() => setWa(false)}>
+              ✕
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="wrap ct">
         <Rv>
           <h2>{site.contactTitle}</h2>
           <p className="sub">{site.contactText}</p>
           <div className="soc">
             <a href={`mailto:${site.email}`}>{site.email}</a>
-            <a href={site.whatsapp} target="_blank" rel="noopener noreferrer">
-              WhatsApp
-            </a>
+            {waDigits && (
+              <button type="button" onClick={() => setWa(true)}>
+                WhatsApp
+              </button>
+            )}
             <a href={site.instagram} target="_blank" rel="noopener noreferrer">
               Instagram
             </a>
